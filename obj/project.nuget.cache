@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "02xFsk82kzUQyUsSXtMOu+RGO0uJb59RIfTyngtbBZcnixi2d10mZIq7MNHNHJxNUZJz8di9dWHu40BOEthvHg==",
+  "success": true,
+  "projectFilePath": "D:\\local projects\\Контур.Тестовое\\Microservices\\Microservices.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\rosyyy\\.nuget\\packages\\polly\\7.2.3\\polly.7.2.3.nupkg.sha512"
+  ],
+  "logs": []
+}
