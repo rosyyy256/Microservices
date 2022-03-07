@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microservices.ExternalServices.Database;
 
 namespace Microservices.Types
 {
