@@ -19,23 +19,12 @@ namespace Microservices
     {
         private class CatForDb : Cat, IEntityWithId<Guid>
         {
-            public DateTime AddedTime { get; set; }
-        }
+            public readonly HashSet<Guid> FavouriteUsers = new();
 
-        private class FavouriteCat : IEntityWithId<Guid>
-        {
-            public Guid Id { get; set; }
-            public List<Guid> UsersId { get; set; }
-
-            public FavouriteCat(Guid id, Guid userId)
+            public CatForDb(){}
+            public CatForDb(Guid id)
             {
                 Id = id;
-                UsersId = new List<Guid> {userId};
-            }
-
-            public void AddFavouriteUser(Guid userId)
-            {
-                UsersId.Add(userId);
             }
         }
 
@@ -66,6 +55,7 @@ namespace Microservices
             var productsList = await TrySendRequest(() => _billingService.GetProductsAsync(skip, limit, cancellationToken));
             var result = new List<Cat>();
             var catsCollection = GetCatsInShelterCollection();
+            
             foreach (var product in productsList)
             {
                 var currentCat = await catsCollection.FindAsync(product.Id, cancellationToken);
@@ -78,54 +68,39 @@ namespace Microservices
         public async Task AddCatToFavouritesAsync(string sessionId, Guid catId, CancellationToken cancellationToken)
         {
             var authorizationResult = await CheckAuthorization(sessionId, cancellationToken);
-            var favouriteCatsCollection = GetFavouriteCatsCollection();
+            var favouriteCatsCollection = GetCatsInShelterCollection();
             var favourite = await favouriteCatsCollection
-                .FindAsync(catId, cancellationToken);
-
-            if (favourite == null) favourite = new FavouriteCat(catId, authorizationResult.UserId);
-            else favourite.AddFavouriteUser(authorizationResult.UserId);
+                .FindAsync(catId, cancellationToken) ?? new CatForDb(catId);
             
+            favourite.FavouriteUsers.Add(authorizationResult.UserId);
             favouriteCatsCollection.WriteAsync(favourite, cancellationToken);
         }
 
         public async Task<List<Cat>> GetFavouriteCatsAsync(string sessionId, CancellationToken cancellationToken)
         {
             var authorizationResult = await CheckAuthorization(sessionId, cancellationToken);
+            var catsCollection = GetCatsInShelterCollection();
+            var favouriteCats = await catsCollection
+                .FindAsync(cat => cat.FavouriteUsers.Contains(authorizationResult.UserId), cancellationToken);
+
             var result = new List<Cat>();
-            var favCatsCollection = GetFavouriteCatsCollection();
-            var favouriteCats = await favCatsCollection
-                .FindAsync(cat => cat.UsersId.Contains(authorizationResult.UserId), cancellationToken);
-            var catsInShelterCollection = GetCatsInShelterCollection();
             foreach (var favouriteCat in favouriteCats)
             {
-                var currentFavourite = await catsInShelterCollection.FindAsync(favouriteCat.Id, cancellationToken);
-                var isSold = await _billingService.GetProductAsync(currentFavourite.Id, cancellationToken) == null;
-                if (isSold)
-                {
-                    favCatsCollection.DeleteAsync(currentFavourite.Id, cancellationToken);
-                    catsInShelterCollection.DeleteAsync(currentFavourite.Id, cancellationToken);
-                }
-                else result.Add(await catsInShelterCollection.FindAsync(favouriteCat.Id, cancellationToken));
+                var isSold = await _billingService.GetProductAsync(favouriteCat.Id, cancellationToken) == null;
+                if (isSold) catsCollection.DeleteAsync(favouriteCat.Id, cancellationToken);
+                else result.Add(favouriteCat);
             }
-
+            
             return result;
         }
 
         public async Task DeleteCatFromFavouritesAsync(string sessionId, Guid catId, CancellationToken cancellationToken)
         {
             var authorizationResult = await CheckAuthorization(sessionId, cancellationToken);
-            var favouriteCats = GetFavouriteCatsCollection();
-            var unFavouriteCatList = favouriteCats
-                .FindAsync(cat => cat.Id == catId, cancellationToken)
-                .Result;
-            if (unFavouriteCatList.Count == 0) return;
-            var unFavouriteCat = unFavouriteCatList.First();
-            if (unFavouriteCat.UsersId.Count == 1) favouriteCats.DeleteAsync(catId, cancellationToken);
-            else
-            {
-                unFavouriteCat.UsersId.Remove(authorizationResult.UserId);
-                favouriteCats.WriteAsync(unFavouriteCat, cancellationToken);
-            }
+            var favouriteCats = GetCatsInShelterCollection();
+            var unFavouriteCat = await favouriteCats
+                .FindAsync(catId, cancellationToken);
+            unFavouriteCat?.FavouriteUsers.Remove(authorizationResult.UserId);
         }
 
         public async Task<Bill> BuyCatAsync(string sessionId, Guid catId, CancellationToken cancellationToken)
@@ -134,7 +109,7 @@ namespace Microservices
             var catCollection = GetCatsInShelterCollection();
             if (await TrySendRequest(() => _billingService.GetProductAsync(catId, cancellationToken)) == null)
                 throw new InvalidRequestException();
-            var buyingCat = await TrySendRequest(() => catCollection.FindAsync(catId, cancellationToken));
+            var buyingCat = await catCollection.FindAsync(catId, cancellationToken);
             if (buyingCat == null) return new Bill();
             var price = buyingCat.Price;
             var bill = await TrySendRequest(() => _billingService.SellProductAsync(catId, price, cancellationToken));
@@ -173,8 +148,7 @@ namespace Microservices
                 CatPhoto = request.Photo,
                 Name = request.Name,
                 Price = priceHistory.Count == 0 ? 1000 : priceHistory.Last().Price,
-                Prices = priceHistory,
-                AddedTime = DateTime.Now
+                Prices = priceHistory
             }, cancellationToken);
 
             return productId;
@@ -209,16 +183,7 @@ namespace Microservices
             return requestResult;
         }
 
-        private IDatabaseCollection<FavouriteCat, Guid> GetFavouriteCatsCollection()
-        {
-            return _database.GetCollection<FavouriteCat, Guid>("FavouriteCats"); 
-        }
-
-        private IDatabaseCollection<CatForDb, Guid> GetCatsInShelterCollection()
-        {
-            return _database.GetCollection<CatForDb, Guid>("CatsInShelter");
-        }
-        
-        //TODO: создать класс для БД, в которую можно записывать Cat, который наследуется до CatForDb
+        private IDatabaseCollection<CatForDb, Guid> GetCatsInShelterCollection() => 
+            _database.GetCollection<CatForDb, Guid>("CatsInShelter");
     }
 }
